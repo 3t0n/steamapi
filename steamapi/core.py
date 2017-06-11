@@ -290,7 +290,7 @@ class APIInterface(object):
         elif validate_key is True:
             if api_key is None:
                 raise ValueError('"validate_key" is True, but no key was given.')
-            
+
             # Call "GetSupportedAPIList", which is guaranteed to succeed with any valid key. (Or no key)
             try:
                 self.ISteamWebAPIUtil.GetSupportedAPIList.v1(key=self._api_key)
@@ -398,11 +398,11 @@ class APIConnection(object):
 
         if 'precache' in settings and issubclass(type(settings['precache']), bool):
             self.precache = settings['precache']
-            
+
         if validate_key:
             if api_key is None:
                 raise ValueError('"validate_key" is True, but no key was given.')
-            
+
             # Call "GetSupportedAPIList", which is guaranteed to succeed with any valid key. (Or no key)
             try:
                 self.call("ISteamWebAPIUtil", "GetSupportedAPIList", "v1")
@@ -423,7 +423,7 @@ class APIConnection(object):
         :param method: Which HTTP method this call should use. GET by default, but can be overriden to use POST for
                        POST-exclusive APIs or long parameter lists.
         :param kwargs: A bunch of keyword arguments for the call itself. "key" and "format" should NOT be specified.
-                       If APIConnection has an assoociated key, "key" will be overwritten by it, and overriding "format"
+                       If APIConnection has an associated key, "key" will be overwritten by it, and overriding "format"
                        cancels out automatic parsing. (The resulting object WILL NOT be an APIResponse but a string.)
 
         :rtype: APIResponse
@@ -466,6 +466,66 @@ class APIConnection(object):
                 return APIResponse(response_obj)
 
 
+@Singleton
+class StoreAPIConnection(object):
+    QUERY_TEMPLATE = "http://store.steampowered.com/api/{command}/"
+
+    def __init__(self):
+        """
+        Initialise the main StoreAPIConnection. Since StoreAPIConnection is a singleton object, any further "initialisations"
+        will not re-initialise the instance but just retrieve the existing instance.
+        """
+
+    def call(self, command, method=GET, **kwargs):
+        """
+        Call an API command. All keyword commands past method will be made into GET/POST-based commands,
+        automatically.
+
+        :param command: A matching command. (E.g.: "appdetails")
+        :param method: Which HTTP method this call should use. GET by default, but can be overriden to use POST for
+                       POST-exclusive APIs or long parameter lists.
+        :param kwargs: A bunch of keyword arguments for the call itself. "key" and "format" should NOT be specified.
+                       If APIConnection has an associated key, "key" will be overwritten by it, and overriding "format"
+                       cancels out automatic parsing. (The resulting object WILL NOT be an APIResponse but a string.)
+
+        :rtype : APIResponse or str
+        """
+        for argument in kwargs:
+            if type(kwargs[argument]) is list:
+                # The API takes multiple values in a "a,b,c" structure, so we
+                # have to encode it in that way.
+                kwargs[argument] = ','.join(kwargs[argument])
+            elif type(kwargs[argument]) is bool:
+                # The API treats True/False as 1/0. Convert it.
+                if kwargs[argument] is True:
+                    kwargs[argument] = 1
+                else:
+                    kwargs[argument] = 0
+
+        automatic_parsing = True
+        if "format" in kwargs:
+            automatic_parsing = False
+        else:
+            kwargs["format"] = "json"
+
+        query = self.QUERY_TEMPLATE.format(command=command)
+
+        if method == POST:
+            response = requests.request(method, query, data=kwargs)
+        else:
+            response = requests.request(method, query, params=kwargs)
+
+        if response.status_code != 200:
+            errors.raiseAppropriateException(response.status_code)
+
+        if automatic_parsing is True:
+            response_obj = response.json()
+            if len(response_obj.keys()) == 1 and 'response' in response_obj:
+                return APIResponse(response_obj['response'])
+            else:
+                return APIResponse(response_obj)
+
+
 class APIResponse(object):
     """
     A dict-proxying object which objectifies API responses for prettier code,
@@ -484,6 +544,15 @@ class APIResponse(object):
                 self._real_dictionary[item] = APIResponse(father_dict[item])
             elif type(father_dict[item]) is list:
                 self._real_dictionary[item] = APIResponse._wrap_list(father_dict[item])
+                """
+                # Merge issue
+                # Recurse if list contains dictionaries
+                if all(type(list_item) is dict for list_item in father_dict[item]):
+                    self._real_dictionary[item] = [APIResponse(entry) for entry in father_dict[item]]
+                #Otherwise set as list of strings
+                else:
+                    self._real_dictionary[item] = [str(entry) for entry in father_dict[item]]
+                """
             else:
                 self._real_dictionary[item] = father_dict[item]
 
